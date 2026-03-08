@@ -1,0 +1,50 @@
+name: Branch Flow Policy
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - preproduction
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  flow:
+    name: Branch Flow Policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate source -> target branch flow
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${{ github.base_ref }}"
+          head="${{ github.head_ref }}"
+
+          case "$base" in
+            dev)
+              allowed=(lms-frontend visit-frontend python-backend)
+              ;;
+            preproduction)
+              allowed=(dev lms-frontend visit-frontend haskell-backend)
+              ;;
+            main)
+              allowed=(preproduction)
+              ;;
+            *)
+              echo "No policy for base branch: $base"
+              exit 0
+              ;;
+          esac
+
+          for b in "${allowed[@]}"; do
+            if [[ "$head" == "$b" ]]; then
+              echo "Flow allowed: $head -> $base"
+              exit 0
+            fi
+          done
+
+          echo "Flow denied: $head -> $base"
+          echo "Allowed source branches: ${allowed[*]}"
+          exit 1
