@@ -1,0 +1,8 @@
+environment: dev
+services:
+  lms_frontend:
+    branch: lms-frontend
+  visit_frontend:
+    branch: visit-frontend
+  backend:
+    branch: python-backend
