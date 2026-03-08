@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: visit-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: visit-frontend
+  template:
+    metadata:
+      labels:
+        app: visit-frontend
+    spec:
+      containers:
+        - name: visit-frontend
+          image: ghcr.io/alberto-kali/visit-frontend:latest
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: visit-frontend
+spec:
+  selector:
+    app: visit-frontend
+  ports:
+    - port: 80
+      targetPort: 80
