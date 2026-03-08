@@ -1,0 +1,6 @@
+.git
+.gitignore
+.stack-work
+dist-newstyle
+k8s
+README.md

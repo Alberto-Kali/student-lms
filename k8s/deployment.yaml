@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haskell-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: haskell-backend
+  template:
+    metadata:
+      labels:
+        app: haskell-backend
+    spec:
+      containers:
+        - name: haskell-backend
+          image: ghcr.io/alberto-kali/haskell-backend:latest
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: haskell-backend
+spec:
+  selector:
+    app: haskell-backend
+  ports:
+    - port: 8080
+      targetPort: 8080
