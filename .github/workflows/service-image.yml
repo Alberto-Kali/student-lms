@@ -31,17 +31,29 @@ jobs:
 
       - name: Detect image name
         id: vars
+        shell: bash
         run: |
+          OWNER_LOWER="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           BRANCH="${GITHUB_REF_NAME:-${GITHUB_HEAD_REF}}"
           case "$BRANCH" in
-            lms-frontend|visit-frontend|python-backend|haskell-backend)
-              echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/${BRANCH}" >> "$GITHUB_OUTPUT"
+            lms-frontend)
+              IMAGE="ghcr.io/${OWNER_LOWER}/lms-lms-frontend"
+              ;;
+            visit-frontend)
+              IMAGE="ghcr.io/${OWNER_LOWER}/lms-visit-frontend"
+              ;;
+            python-backend)
+              IMAGE="ghcr.io/${OWNER_LOWER}/lms-python-backend"
+              ;;
+            haskell-backend)
+              IMAGE="ghcr.io/${OWNER_LOWER}/lms-haskell-backend"
               ;;
             *)
               echo "Unsupported branch: $BRANCH" >&2
               exit 1
               ;;
           esac
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
       - name: Login to GHCR
         if: github.event_name == 'push'
