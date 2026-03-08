@@ -1,0 +1,72 @@
+name: Service Image CI
+
+on:
+  push:
+    branches:
+      - lms-frontend
+      - visit-frontend
+      - python-backend
+      - haskell-backend
+  pull_request:
+    branches:
+      - lms-frontend
+      - visit-frontend
+      - python-backend
+      - haskell-backend
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    name: Build Service Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Detect image name
+        id: vars
+        run: |
+          BRANCH="${GITHUB_REF_NAME:-${GITHUB_HEAD_REF}}"
+          case "$BRANCH" in
+            lms-frontend|visit-frontend|python-backend|haskell-backend)
+              echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/${BRANCH}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unsupported branch: $BRANCH" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Login to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (PR)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: ${{ steps.vars.outputs.image }}:pr-${{ github.event.pull_request.number }}
+
+      - name: Build and Push (branch)
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ steps.vars.outputs.image }}:latest
+            ${{ steps.vars.outputs.image }}:sha-${{ github.sha }}
