@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: visit-frontend
-          image: ghcr.io/alberto-kali/visit-frontend:latest
+          image: ghcr.io/alberto-kali/lms-visit-frontend:latest
           ports:
             - containerPort: 80
 ---
