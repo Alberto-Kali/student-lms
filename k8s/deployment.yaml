@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: lms-frontend
-          image: ghcr.io/alberto-kali/lms-frontend:latest
+          image: ghcr.io/alberto-kali/lms-lms-frontend:latest
           ports:
             - containerPort: 80
 ---
