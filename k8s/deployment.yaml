@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: haskell-backend
-          image: ghcr.io/alberto-kali/haskell-backend:latest
+          image: ghcr.io/alberto-kali/lms-haskell-backend:latest
           ports:
             - containerPort: 8080
 ---
