@@ -1,4 +1,4 @@
-FROM commercialhaskell/stack:2.15.7 AS build
+FROM fpco/stack-build:lts-22.43 AS build
 WORKDIR /app
 COPY stack.yaml package.yaml ./
 COPY src ./src
