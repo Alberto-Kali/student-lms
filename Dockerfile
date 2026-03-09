@@ -1,8 +1,7 @@
 FROM oven/bun:1.2.5 AS build
 WORKDIR /app
-COPY package.json vite.config.ts ./
-COPY src ./src
-RUN bun install
+COPY . .
+RUN bun install --frozen-lockfile
 RUN bun run build
 
 FROM nginx:1.27-alpine
