@@ -7,7 +7,7 @@ import Network.Wai (Application)
 import Network.Wai.Handler.Warp (run)
 import Servant
 
-type Api = "healthz" :> Get '[JSON] String
+type Api = "health" :> Get '[JSON] String
 
 server :: Server Api
 server = pure "ok:haskell-servant"
