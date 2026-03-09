@@ -31,20 +31,33 @@ jobs:
 
       - name: Detect image name
         id: vars
+        shell: bash
         run: |
-          BRANCH="${GITHUB_REF_NAME:-${GITHUB_HEAD_REF}}"
+          OWNER_LOWER="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            BRANCH="${GITHUB_BASE_REF}"
+          else
+            BRANCH="${GITHUB_REF_NAME}"
+          fi
+
           case "$BRANCH" in
-            lms-frontend|visit-frontend|python-backend|haskell-backend)
-              echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/${BRANCH}" >> "$GITHUB_OUTPUT"
-              ;;
+            lms-frontend) IMAGE="ghcr.io/${OWNER_LOWER}/lms-lms-frontend" ;;
+            visit-frontend) IMAGE="ghcr.io/${OWNER_LOWER}/lms-visit-frontend" ;;
+            python-backend) IMAGE="ghcr.io/${OWNER_LOWER}/lms-python-backend" ;;
+            haskell-backend) IMAGE="ghcr.io/${OWNER_LOWER}/lms-haskell-backend" ;;
             *)
-              echo "Unsupported branch: $BRANCH" >&2
-              exit 1
+              echo "Skip build for unsupported target branch: $BRANCH"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
               ;;
           esac
 
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
       - name: Login to GHCR
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && steps.vars.outputs.skip != 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -52,7 +65,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build (PR)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.vars.outputs.skip != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -61,7 +74,7 @@ jobs:
           tags: ${{ steps.vars.outputs.image }}:pr-${{ github.event.pull_request.number }}
 
       - name: Build and Push (branch)
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && steps.vars.outputs.skip != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .

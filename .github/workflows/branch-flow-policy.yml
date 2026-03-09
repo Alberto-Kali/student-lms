@@ -22,6 +22,12 @@ jobs:
           base="${{ github.base_ref }}"
           head="${{ github.head_ref }}"
 
+          # Allow explicit maintenance branches used for CI/policy updates.
+          if [[ "$head" == chore/* ]] || [[ "$head" == hotfix/* ]]; then
+            echo "Flow allowed (maintenance): $head -> $base"
+            exit 0
+          fi
+
           case "$base" in
             dev)
               allowed=(lms-frontend visit-frontend python-backend)
