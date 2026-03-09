@@ -58,38 +58,138 @@ jobs:
           for ENV_NAME in "${TARGET_ENVS[@]}"; do
             if [[ "$ENV_NAME" == "dev" ]]; then
               BACKEND_IMAGE="ghcr.io/${OWNER_LOWER}/lms-python-backend"
-              BACKEND_SERVICE="python-backend"
               BACKEND_PORT=8000
             else
               BACKEND_IMAGE="ghcr.io/${OWNER_LOWER}/lms-haskell-backend"
-              BACKEND_SERVICE="haskell-backend"
               BACKEND_PORT=8080
             fi
 
             git fetch origin "$ENV_NAME"
             git checkout -B "$ENV_NAME" "origin/$ENV_NAME"
 
-            mkdir -p environments/generated
+            mkdir -p environments/generated k8s nginx
 
-            cat > environments/generated/docker-compose.generated.yml <<EOF
+            cat > docker-compose.yml <<EOF
             name: student-lms-${ENV_NAME}
             services:
+              nginx:
+                image: nginx:1.27-alpine
+                pull_policy: always
+                ports:
+                  - "\${PUBLIC_PORT:-8080}:80"
+                volumes:
+                  - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+                depends_on:
+                  - lms-frontend
+                  - visit-frontend
+                  - backend
+
               lms-frontend:
                 image: ghcr.io/${OWNER_LOWER}/lms-lms-frontend:latest
-                ports:
-                  - "8081:80"
+                pull_policy: always
+
               visit-frontend:
                 image: ghcr.io/${OWNER_LOWER}/lms-visit-frontend:latest
-                ports:
-                  - "8082:80"
-              ${BACKEND_SERVICE}:
-                image: ${BACKEND_IMAGE}:latest
-                ports:
-                  - "${BACKEND_PORT}:${BACKEND_PORT}"
-          EOF
-            sed -i 's/^            //' environments/generated/docker-compose.generated.yml
+                pull_policy: always
 
-            cat > environments/generated/k8s.generated.yaml <<EOF
+              backend:
+                image: ${BACKEND_IMAGE}:latest
+                pull_policy: always
+          EOF
+            sed -i 's/^            //' docker-compose.yml
+
+            cat > nginx/default.conf <<EOF
+            server {
+              listen 80;
+              server_name _;
+
+              location = /healthz {
+                return 200 'ok';
+                add_header Content-Type text/plain;
+              }
+
+              location /api/ {
+                proxy_http_version 1.1;
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+                proxy_pass http://backend:${BACKEND_PORT};
+              }
+
+              location /visit/ {
+                rewrite ^/visit/?(.*)$ /\$1 break;
+                proxy_http_version 1.1;
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+                proxy_pass http://visit-frontend:80;
+              }
+
+              location / {
+                proxy_http_version 1.1;
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+                proxy_pass http://lms-frontend:80;
+              }
+            }
+          EOF
+            sed -i 's/^            //' nginx/default.conf
+
+            cat > k8s/generated.yaml <<EOF
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: ${ENV_NAME}
+            ---
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: nginx-config
+              namespace: ${ENV_NAME}
+            data:
+              default.conf: |
+                server {
+                  listen 80;
+                  server_name _;
+
+                  location = /healthz {
+                    return 200 'ok';
+                    add_header Content-Type text/plain;
+                  }
+
+                  location /api/ {
+                    proxy_http_version 1.1;
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_pass http://backend:${BACKEND_PORT};
+                  }
+
+                  location /visit/ {
+                    rewrite ^/visit/?(.*)$ /\$1 break;
+                    proxy_http_version 1.1;
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_pass http://visit-frontend:80;
+                  }
+
+                  location / {
+                    proxy_http_version 1.1;
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_pass http://lms-frontend:80;
+                  }
+                }
+            ---
             apiVersion: apps/v1
             kind: Deployment
             metadata:
@@ -108,8 +208,21 @@ jobs:
                   containers:
                     - name: lms-frontend
                       image: ghcr.io/${OWNER_LOWER}/lms-lms-frontend:latest
+                      imagePullPolicy: Always
                       ports:
                         - containerPort: 80
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: lms-frontend
+              namespace: ${ENV_NAME}
+            spec:
+              selector:
+                app: lms-frontend
+              ports:
+                - port: 80
+                  targetPort: 80
             ---
             apiVersion: apps/v1
             kind: Deployment
@@ -129,31 +242,100 @@ jobs:
                   containers:
                     - name: visit-frontend
                       image: ghcr.io/${OWNER_LOWER}/lms-visit-frontend:latest
+                      imagePullPolicy: Always
                       ports:
                         - containerPort: 80
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: visit-frontend
+              namespace: ${ENV_NAME}
+            spec:
+              selector:
+                app: visit-frontend
+              ports:
+                - port: 80
+                  targetPort: 80
             ---
             apiVersion: apps/v1
             kind: Deployment
             metadata:
-              name: ${BACKEND_SERVICE}
+              name: backend
               namespace: ${ENV_NAME}
             spec:
               replicas: 2
               selector:
                 matchLabels:
-                  app: ${BACKEND_SERVICE}
+                  app: backend
               template:
                 metadata:
                   labels:
-                    app: ${BACKEND_SERVICE}
+                    app: backend
                 spec:
                   containers:
-                    - name: ${BACKEND_SERVICE}
+                    - name: backend
                       image: ${BACKEND_IMAGE}:latest
+                      imagePullPolicy: Always
                       ports:
                         - containerPort: ${BACKEND_PORT}
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: backend
+              namespace: ${ENV_NAME}
+            spec:
+              selector:
+                app: backend
+              ports:
+                - port: ${BACKEND_PORT}
+                  targetPort: ${BACKEND_PORT}
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: nginx
+              namespace: ${ENV_NAME}
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: nginx
+              template:
+                metadata:
+                  labels:
+                    app: nginx
+                spec:
+                  containers:
+                    - name: nginx
+                      image: nginx:1.27-alpine
+                      ports:
+                        - containerPort: 80
+                      volumeMounts:
+                        - name: nginx-config
+                          mountPath: /etc/nginx/conf.d/default.conf
+                          subPath: default.conf
+                  volumes:
+                    - name: nginx-config
+                      configMap:
+                        name: nginx-config
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: nginx
+              namespace: ${ENV_NAME}
+            spec:
+              type: LoadBalancer
+              selector:
+                app: nginx
+              ports:
+                - name: http
+                  port: 80
+                  targetPort: 80
           EOF
-            sed -i 's/^            //' environments/generated/k8s.generated.yaml
+            sed -i 's/^            //' k8s/generated.yaml
 
             cat > environments/generated/metadata.txt <<EOF
             source_service_branch=${BASE_BRANCH}
@@ -165,15 +347,20 @@ jobs:
           EOF
             sed -i 's/^            //' environments/generated/metadata.txt
 
-            git add environments/generated/docker-compose.generated.yml \
-                    environments/generated/k8s.generated.yaml \
-                    environments/generated/metadata.txt
+            rm -f environments/generated/docker-compose.generated.yml environments/generated/k8s.generated.yaml
+
+            git add docker-compose.yml \
+                    nginx/default.conf \
+                    k8s/generated.yaml \
+                    environments/generated/metadata.txt \
+                    environments/generated/docker-compose.generated.yml \
+                    environments/generated/k8s.generated.yaml
 
             if git diff --cached --quiet; then
               echo "No manifest changes for ${ENV_NAME}"
               continue
             fi
 
-            git commit -m "chore(env): regenerate ${ENV_NAME} manifests from ${BASE_BRANCH} PR #${PR_NUMBER}"
+            git commit -m "chore(env): regenerate ${ENV_NAME} runtime manifests from ${BASE_BRANCH} PR #${PR_NUMBER}"
             git push origin "HEAD:${ENV_NAME}"
           done
