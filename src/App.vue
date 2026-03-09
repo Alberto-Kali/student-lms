@@ -1,6 +1,9 @@
 <template>
-  <main>
-    <h1>Visit Frontend</h1>
-    <p>Bun + Vite + Vue baseline</p>
-  </main>
+  <main class="empty-visit"></main>
 </template>
+
+<style scoped>
+.empty-visit {
+  min-height: 100vh;
+}
+</style>
