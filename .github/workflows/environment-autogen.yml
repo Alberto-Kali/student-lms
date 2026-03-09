@@ -95,6 +95,28 @@ jobs:
               backend:
                 image: ${BACKEND_IMAGE}:latest
                 pull_policy: always
+                depends_on:
+                  clickhouse:
+                    condition: service_healthy
+                environment:
+                  LMS_CLICKHOUSE_HOST: clickhouse
+                  LMS_CLICKHOUSE_PORT: 8123
+                  LMS_CLICKHOUSE_DATABASE: lms
+                  LMS_CLICKHOUSE_USER: default
+                  LMS_CLICKHOUSE_PASSWORD: ""
+
+              clickhouse:
+                image: clickhouse/clickhouse-server:25.3
+                pull_policy: always
+                healthcheck:
+                  test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+                  interval: 10s
+                  timeout: 5s
+                  retries: 10
+                volumes:
+                  - clickhouse_data:/var/lib/clickhouse
+            volumes:
+              clickhouse_data:
           EOF
             sed -i 's/^            //' docker-compose.yml
 
@@ -261,6 +283,45 @@ jobs:
             apiVersion: apps/v1
             kind: Deployment
             metadata:
+              name: clickhouse
+              namespace: ${ENV_NAME}
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: clickhouse
+              template:
+                metadata:
+                  labels:
+                    app: clickhouse
+                spec:
+                  containers:
+                    - name: clickhouse
+                      image: clickhouse/clickhouse-server:25.3
+                      imagePullPolicy: Always
+                      ports:
+                        - containerPort: 8123
+                        - containerPort: 9000
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: clickhouse
+              namespace: ${ENV_NAME}
+            spec:
+              selector:
+                app: clickhouse
+              ports:
+                - name: http
+                  port: 8123
+                  targetPort: 8123
+                - name: native
+                  port: 9000
+                  targetPort: 9000
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
               name: backend
               namespace: ${ENV_NAME}
             spec:
@@ -279,6 +340,17 @@ jobs:
                       imagePullPolicy: Always
                       ports:
                         - containerPort: ${BACKEND_PORT}
+                      env:
+                        - name: LMS_CLICKHOUSE_HOST
+                          value: clickhouse
+                        - name: LMS_CLICKHOUSE_PORT
+                          value: "8123"
+                        - name: LMS_CLICKHOUSE_DATABASE
+                          value: lms
+                        - name: LMS_CLICKHOUSE_USER
+                          value: default
+                        - name: LMS_CLICKHOUSE_PASSWORD
+                          value: ""
             ---
             apiVersion: v1
             kind: Service
