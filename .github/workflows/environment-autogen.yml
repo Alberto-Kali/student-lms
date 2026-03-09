@@ -86,7 +86,7 @@ jobs:
                 image: ${BACKEND_IMAGE}:latest
                 ports:
                   - "${BACKEND_PORT}:${BACKEND_PORT}"
-EOF
+          EOF
             sed -i 's/^            //' environments/generated/docker-compose.generated.yml
 
             cat > environments/generated/k8s.generated.yaml <<EOF
@@ -152,7 +152,7 @@ EOF
                       image: ${BACKEND_IMAGE}:latest
                       ports:
                         - containerPort: ${BACKEND_PORT}
-EOF
+          EOF
             sed -i 's/^            //' environments/generated/k8s.generated.yaml
 
             cat > environments/generated/metadata.txt <<EOF
@@ -162,7 +162,7 @@ EOF
             source_sha=${HEAD_SHA}
             source_sha_short=${SHA_SHORT}
             generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-EOF
+          EOF
             sed -i 's/^            //' environments/generated/metadata.txt
 
             git add environments/generated/docker-compose.generated.yml \
