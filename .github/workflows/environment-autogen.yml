@@ -1,0 +1,179 @@
+name: Environment Manifests Autogen
+
+on:
+  pull_request_review:
+    types: [submitted]
+    branches:
+      - lms-frontend
+      - visit-frontend
+      - python-backend
+      - haskell-backend
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  generate:
+    if: github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate and push manifests to integration branches
+        shell: bash
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          OWNER_LOWER="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          SHA_SHORT="${HEAD_SHA:0:12}"
+
+          case "$BASE_BRANCH" in
+            lms-frontend|visit-frontend)
+              TARGET_ENVS=(dev preproduction)
+              ;;
+            python-backend)
+              TARGET_ENVS=(dev)
+              ;;
+            haskell-backend)
+              TARGET_ENVS=(preproduction)
+              ;;
+            *)
+              echo "Unsupported service branch: $BASE_BRANCH"
+              exit 0
+              ;;
+          esac
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          for ENV_NAME in "${TARGET_ENVS[@]}"; do
+            if [[ "$ENV_NAME" == "dev" ]]; then
+              BACKEND_IMAGE="ghcr.io/${OWNER_LOWER}/lms-python-backend"
+              BACKEND_SERVICE="python-backend"
+              BACKEND_PORT=8000
+            else
+              BACKEND_IMAGE="ghcr.io/${OWNER_LOWER}/lms-haskell-backend"
+              BACKEND_SERVICE="haskell-backend"
+              BACKEND_PORT=8080
+            fi
+
+            git fetch origin "$ENV_NAME"
+            git checkout -B "$ENV_NAME" "origin/$ENV_NAME"
+
+            mkdir -p environments/generated
+
+            cat > environments/generated/docker-compose.generated.yml <<EOF
+            name: student-lms-${ENV_NAME}
+            services:
+              lms-frontend:
+                image: ghcr.io/${OWNER_LOWER}/lms-lms-frontend:latest
+                ports:
+                  - "8081:80"
+              visit-frontend:
+                image: ghcr.io/${OWNER_LOWER}/lms-visit-frontend:latest
+                ports:
+                  - "8082:80"
+              ${BACKEND_SERVICE}:
+                image: ${BACKEND_IMAGE}:latest
+                ports:
+                  - "${BACKEND_PORT}:${BACKEND_PORT}"
+          EOF
+            sed -i 's/^            //' environments/generated/docker-compose.generated.yml
+
+            cat > environments/generated/k8s.generated.yaml <<EOF
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: lms-frontend
+              namespace: ${ENV_NAME}
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: lms-frontend
+              template:
+                metadata:
+                  labels:
+                    app: lms-frontend
+                spec:
+                  containers:
+                    - name: lms-frontend
+                      image: ghcr.io/${OWNER_LOWER}/lms-lms-frontend:latest
+                      ports:
+                        - containerPort: 80
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: visit-frontend
+              namespace: ${ENV_NAME}
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: visit-frontend
+              template:
+                metadata:
+                  labels:
+                    app: visit-frontend
+                spec:
+                  containers:
+                    - name: visit-frontend
+                      image: ghcr.io/${OWNER_LOWER}/lms-visit-frontend:latest
+                      ports:
+                        - containerPort: 80
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: ${BACKEND_SERVICE}
+              namespace: ${ENV_NAME}
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: ${BACKEND_SERVICE}
+              template:
+                metadata:
+                  labels:
+                    app: ${BACKEND_SERVICE}
+                spec:
+                  containers:
+                    - name: ${BACKEND_SERVICE}
+                      image: ${BACKEND_IMAGE}:latest
+                      ports:
+                        - containerPort: ${BACKEND_PORT}
+          EOF
+            sed -i 's/^            //' environments/generated/k8s.generated.yaml
+
+            cat > environments/generated/metadata.txt <<EOF
+            source_service_branch=${BASE_BRANCH}
+            trigger=pull_request_review_approved
+            pr_number=${PR_NUMBER}
+            source_sha=${HEAD_SHA}
+            source_sha_short=${SHA_SHORT}
+            generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          EOF
+            sed -i 's/^            //' environments/generated/metadata.txt
+
+            git add environments/generated/docker-compose.generated.yml \
+                    environments/generated/k8s.generated.yaml \
+                    environments/generated/metadata.txt
+
+            if git diff --cached --quiet; then
+              echo "No manifest changes for ${ENV_NAME}"
+              continue
+            fi
+
+            git commit -m "chore(env): regenerate ${ENV_NAME} manifests from ${BASE_BRANCH} PR #${PR_NUMBER}"
+            git push origin "HEAD:${ENV_NAME}"
+          done
