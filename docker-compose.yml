@@ -1,0 +1,32 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      LMS_CLICKHOUSE_HOST: clickhouse
+      LMS_CLICKHOUSE_PORT: 8123
+      LMS_CLICKHOUSE_DATABASE: lms
+      LMS_CLICKHOUSE_USER: default
+      LMS_CLICKHOUSE_PASSWORD: ""
+    ports:
+      - "8000:8000"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.3
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  clickhouse_data:
