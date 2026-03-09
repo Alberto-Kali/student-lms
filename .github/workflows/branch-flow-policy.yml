@@ -23,7 +23,7 @@ jobs:
           head="${{ github.head_ref }}"
 
           # Allow explicit maintenance branches used for CI/policy updates.
-          if [[ "$head" == chore/* ]] || [[ "$head" == hotfix/* ]]; then
+          if [[ "$head" == chore/* ]] || [[ "$head" == hotfix/* ]] || [[ "$head" == init/* ]]; then
             echo "Flow allowed (maintenance): $head -> $base"
             exit 0
           fi
