@@ -1,0 +1,54 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.3
+    environment:
+      CLICKHOUSE_DB: lms
+      CLICKHOUSE_USER: lms
+      CLICKHOUSE_PASSWORD: lms_dev_password
+    ports:
+      - "18123:8123"
+      - "19000:9000"
+    volumes:
+      - smoke_python_clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    image: ${IMAGE_REGISTRY:-ghcr.io/alberto-kali}/lms-python-backend:latest
+    environment:
+      LMS_CLICKHOUSE_HOST: clickhouse
+      LMS_CLICKHOUSE_PORT: 8123
+      LMS_CLICKHOUSE_DATABASE: lms
+      LMS_CLICKHOUSE_USER: lms
+      LMS_CLICKHOUSE_PASSWORD: lms_dev_password
+      LMS_CORS_ORIGINS: '["http://localhost:18081"]'
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  lms-frontend:
+    image: ${IMAGE_REGISTRY:-ghcr.io/alberto-kali}/lms-lms-frontend:latest
+    depends_on:
+      - backend
+
+  visit-frontend:
+    image: ${IMAGE_REGISTRY:-ghcr.io/alberto-kali}/lms-visit-frontend:latest
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "18081:80"
+    volumes:
+      - ./nginx/smoke-python.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+      - lms-frontend
+      - visit-frontend
+
+volumes:
+  smoke_python_clickhouse_data:
