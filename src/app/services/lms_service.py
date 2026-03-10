@@ -50,14 +50,23 @@ def get_dashboard(user: UserProfile, demo_accounts) -> DashboardPayload:
     )
 
 
+def _first_row(result):
+    return result.result_rows[0] if result.result_rows else None
+
+
+def _scalar(result, default=None):
+    row = _first_row(result)
+    return row[0] if row else default
+
+
 def list_courses(user: UserProfile) -> list[CourseSummary]:
     client = create_clickhouse_client()
     if user.role == "student":
         rows = client.query(
             """
             SELECT c.id, c.title, c.description, c.teacher_name, c.audience, c.status, e.progress
-            FROM courses FINAL AS c
-            INNER JOIN course_enrollments FINAL AS e ON c.id = e.course_id
+            FROM (SELECT * FROM courses FINAL) AS c
+            INNER JOIN (SELECT * FROM course_enrollments FINAL) AS e ON c.id = e.course_id
             WHERE e.user_id = %(user_id)s AND e.status = 'active'
             ORDER BY c.title
             """,
@@ -99,7 +108,7 @@ def list_courses(user: UserProfile) -> list[CourseSummary]:
 def get_course_detail(user: UserProfile, course_id: str) -> CourseDetail:
     _ensure_course_access(user, course_id)
     client = create_clickhouse_client()
-    course_row = client.query(
+    course_row = _first_row(client.query(
         """
         SELECT id, title, description, teacher_name, audience, status
         FROM courses FINAL
@@ -107,7 +116,7 @@ def get_course_detail(user: UserProfile, course_id: str) -> CourseDetail:
         LIMIT 1
         """,
         parameters={"course_id": course_id},
-    ).first_row
+    ))
     if course_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Курс не найден")
 
@@ -182,7 +191,7 @@ def start_test_attempt(user: UserProfile, test_id: str) -> TestAttemptStart:
     if user.role != "student":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Тесты запускаются из студенческого кабинета")
     client = create_clickhouse_client()
-    test_row = client.query(
+    test_row = _first_row(client.query(
         """
         SELECT id, course_id, title, description, duration_minutes, max_attempts, passing_score
         FROM tests FINAL
@@ -190,24 +199,24 @@ def start_test_attempt(user: UserProfile, test_id: str) -> TestAttemptStart:
         LIMIT 1
         """,
         parameters={"test_id": test_id},
-    ).first_row
+    ))
     if test_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Тест не найден")
 
     course_id = test_row[1]
     _ensure_course_access(user, course_id)
-    attempts_count = client.query(
+    attempts_count = _scalar(client.query(
         """
         SELECT count()
         FROM test_attempts FINAL
         WHERE test_id = %(test_id)s AND user_id = %(user_id)s AND status = 'submitted'
         """,
         parameters={"test_id": test_id, "user_id": user.id},
-    ).first_row[0]
+    ), 0)
     if attempts_count >= test_row[5]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Достигнут лимит попыток")
 
-    active_attempt = client.query(
+    active_attempt = _first_row(client.query(
         """
         SELECT id, started_at
         FROM test_attempts FINAL
@@ -215,7 +224,7 @@ def start_test_attempt(user: UserProfile, test_id: str) -> TestAttemptStart:
         LIMIT 1
         """,
         parameters={"test_id": test_id, "user_id": user.id},
-    ).first_row
+    ))
 
     now = utc_now()
     attempt_id = active_attempt[0] if active_attempt is not None else f"attempt-{test_id}-{user.id}-{int(now.timestamp())}"
@@ -254,7 +263,7 @@ def submit_test_attempt(user: UserProfile, test_id: str, attempt_id: str, payloa
     if user.role != "student":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав")
     client = create_clickhouse_client()
-    attempt_row = client.query(
+    attempt_row = _first_row(client.query(
         """
         SELECT id, course_id, teacher_id, started_at, status
         FROM test_attempts FINAL
@@ -262,7 +271,7 @@ def submit_test_attempt(user: UserProfile, test_id: str, attempt_id: str, payloa
         LIMIT 1
         """,
         parameters={"attempt_id": attempt_id, "test_id": test_id, "user_id": user.id},
-    ).first_row
+    ))
     if attempt_row is None or attempt_row[4] != "in_progress":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Активная попытка не найдена")
 
@@ -277,10 +286,10 @@ def submit_test_attempt(user: UserProfile, test_id: str, attempt_id: str, payloa
         if actual == expected:
             earned_points += question["points"]
 
-    test_row = client.query(
+    test_row = _first_row(client.query(
         "SELECT passing_score FROM tests FINAL WHERE id = %(test_id)s LIMIT 1",
         parameters={"test_id": test_id},
-    ).first_row
+    ))
     passing_score = test_row[0]
     score = int(round((earned_points / total_points) * 100)) if total_points else 0
     now = utc_now()
@@ -434,10 +443,10 @@ def list_review_queue(user: UserProfile) -> list[ReviewQueueItem]:
                 a.score,
                 a.submitted_at,
                 c.teacher_name
-            FROM test_attempts FINAL AS a
-            INNER JOIN users FINAL AS u ON a.user_id = u.id
-            INNER JOIN courses FINAL AS c ON a.course_id = c.id
-            INNER JOIN tests FINAL AS t ON a.test_id = t.id
+            FROM (SELECT * FROM test_attempts FINAL) AS a
+            INNER JOIN (SELECT * FROM users FINAL) AS u ON a.user_id = u.id
+            INNER JOIN (SELECT * FROM courses FINAL) AS c ON a.course_id = c.id
+            INNER JOIN (SELECT * FROM tests FINAL) AS t ON a.test_id = t.id
             WHERE a.status = 'submitted' AND a.teacher_id = %(user_id)s
             ORDER BY a.submitted_at DESC
             """,
@@ -454,10 +463,10 @@ def list_review_queue(user: UserProfile) -> list[ReviewQueueItem]:
                 a.score,
                 a.submitted_at,
                 c.teacher_name
-            FROM test_attempts FINAL AS a
-            INNER JOIN users FINAL AS u ON a.user_id = u.id
-            INNER JOIN courses FINAL AS c ON a.course_id = c.id
-            INNER JOIN tests FINAL AS t ON a.test_id = t.id
+            FROM (SELECT * FROM test_attempts FINAL) AS a
+            INNER JOIN (SELECT * FROM users FINAL) AS u ON a.user_id = u.id
+            INNER JOIN (SELECT * FROM courses FINAL) AS c ON a.course_id = c.id
+            INNER JOIN (SELECT * FROM tests FINAL) AS t ON a.test_id = t.id
             WHERE a.status = 'submitted'
             ORDER BY a.submitted_at DESC
             """
@@ -483,12 +492,12 @@ def _ensure_course_access(user: UserProfile, course_id: str) -> None:
         return
 
     if user.role == "teacher":
-        row = client.query(
+        row = _first_row(client.query(
             "SELECT id FROM courses FINAL WHERE id = %(course_id)s AND teacher_id = %(user_id)s LIMIT 1",
             parameters={"course_id": course_id, "user_id": user.id},
-        ).first_row
+        ))
     else:
-        row = client.query(
+        row = _first_row(client.query(
             """
             SELECT id
             FROM course_enrollments FINAL
@@ -496,7 +505,7 @@ def _ensure_course_access(user: UserProfile, course_id: str) -> None:
             LIMIT 1
             """,
             parameters={"course_id": course_id, "user_id": user.id},
-        ).first_row
+        ))
 
     if row is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа к курсу")
@@ -591,16 +600,16 @@ def _get_test_questions(test_id: str, include_correct: bool = False) -> list[Tes
 
 def _get_course_teacher_id(course_id: str) -> str:
     client = create_clickhouse_client()
-    row = client.query(
+    row = _first_row(client.query(
         "SELECT teacher_id FROM courses FINAL WHERE id = %(course_id)s LIMIT 1",
         parameters={"course_id": course_id},
-    ).first_row
+    ))
     return row[0] if row else ""
 
 
 def _get_enrollment_id(user_id: str, course_id: str) -> str | None:
     client = create_clickhouse_client()
-    row = client.query(
+    row = _first_row(client.query(
         """
         SELECT id
         FROM course_enrollments FINAL
@@ -608,13 +617,13 @@ def _get_enrollment_id(user_id: str, course_id: str) -> str | None:
         LIMIT 1
         """,
         parameters={"user_id": user_id, "course_id": course_id},
-    ).first_row
+    ))
     return row[0] if row else None
 
 
 def _get_course_progress(user_id: str, course_id: str) -> int:
     client = create_clickhouse_client()
-    row = client.query(
+    row = _first_row(client.query(
         """
         SELECT progress
         FROM course_enrollments FINAL
@@ -622,13 +631,13 @@ def _get_course_progress(user_id: str, course_id: str) -> int:
         LIMIT 1
         """,
         parameters={"user_id": user_id, "course_id": course_id},
-    ).first_row
+    ))
     return int(row[0]) if row else 0
 
 
 def _refresh_course_progress(user_id: str, course_id: str) -> None:
     client = create_clickhouse_client()
-    enrollment_row = client.query(
+    enrollment_row = _first_row(client.query(
         """
         SELECT id, role, status
         FROM course_enrollments FINAL
@@ -636,40 +645,40 @@ def _refresh_course_progress(user_id: str, course_id: str) -> None:
         LIMIT 1
         """,
         parameters={"user_id": user_id, "course_id": course_id},
-    ).first_row
+    ))
     if enrollment_row is None:
         return
 
-    total_modules = client.query(
+    total_modules = _scalar(client.query(
         "SELECT count() FROM course_modules FINAL WHERE course_id = %(course_id)s",
         parameters={"course_id": course_id},
-    ).first_row[0]
-    completed_modules = client.query(
+    ), 0)
+    completed_modules = _scalar(client.query(
         """
         SELECT count()
         FROM course_module_progress FINAL
         WHERE user_id = %(user_id)s AND course_id = %(course_id)s AND status = 'completed'
         """,
         parameters={"user_id": user_id, "course_id": course_id},
-    ).first_row[0]
+    ), 0)
     test_rows = client.query(
         """
         SELECT t.id, t.passing_score
-        FROM tests FINAL AS t
+        FROM (SELECT * FROM tests FINAL) AS t
         WHERE t.course_id = %(course_id)s
         """,
         parameters={"course_id": course_id},
     ).result_rows
     passed_tests = 0
     for test_id, passing_score in test_rows:
-        attempt = client.query(
+        attempt = _scalar(client.query(
             """
             SELECT max(score)
             FROM test_attempts FINAL
             WHERE user_id = %(user_id)s AND test_id = %(test_id)s AND status = 'submitted'
             """,
             parameters={"user_id": user_id, "test_id": test_id},
-        ).first_row[0]
+        ))
         if attempt is not None and int(attempt) >= int(passing_score):
             passed_tests += 1
 
@@ -694,18 +703,18 @@ def _create_result_notifications(
     score: int,
 ) -> None:
     client = create_clickhouse_client()
-    user_name = client.query(
+    user_name = _scalar(client.query(
         "SELECT full_name FROM users FINAL WHERE id = %(user_id)s LIMIT 1",
         parameters={"user_id": actor_user_id},
-    ).first_row[0]
-    test_title = client.query(
+    ), "")
+    test_title = _scalar(client.query(
         "SELECT title FROM tests FINAL WHERE id = %(test_id)s LIMIT 1",
         parameters={"test_id": test_id},
-    ).first_row[0]
-    course_title = client.query(
+    ), "")
+    course_title = _scalar(client.query(
         "SELECT title FROM courses FINAL WHERE id = %(course_id)s LIMIT 1",
         parameters={"course_id": course_id},
-    ).first_row[0]
+    ), "")
     admin_rows = client.query(
         "SELECT id FROM users FINAL WHERE role = 'admin' AND status = 'approved'",
     ).result_rows
