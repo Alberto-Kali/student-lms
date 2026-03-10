@@ -519,6 +519,98 @@ td {
   resize: vertical;
 }
 
+.workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 1rem;
+}
+
+.course-pick {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  padding: 0.85rem;
+  display: grid;
+  gap: 0.3rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.course-pick.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(243, 94, 36, 0.12);
+}
+
+.empty-state {
+  color: var(--muted);
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  align-items: flex-start;
+}
+
+.module-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(170deg, #fffdf9, #fff5ea);
+  padding: 0.95rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.module-card p,
+.module-card small {
+  color: var(--muted);
+}
+
+.module-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  align-items: center;
+}
+
+.runner-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(43, 18, 10, 0.38);
+  padding: 1rem;
+  overflow: auto;
+}
+
+.runner-panel {
+  width: min(860px, 100%);
+  margin: 0 auto;
+}
+
+.answer-option {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.7rem 0.8rem;
+  background: #fff;
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+@media (max-width: 960px) {
+  .workspace-grid,
+  .hero,
+  .auth-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .user-chip {
+    min-width: unset;
+    width: 100%;
+  }
+}
+
 .ui-field input:focus,
 .ui-field select:focus,
 .ui-field textarea:focus {
