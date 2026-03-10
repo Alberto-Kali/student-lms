@@ -1,3 +1,5 @@
+from datetime import timezone
+
 from fastapi import HTTPException, status
 
 from app.core.security import create_session_token, hash_token, session_expiry, utc_now, verify_password
@@ -16,6 +18,14 @@ def _row_to_user(row: tuple) -> UserProfile:
         group_name=row[6] or "",
         department=row[7] or "",
     )
+
+
+def _normalize_clickhouse_datetime(value):
+    if value is None:
+        return None
+    if getattr(value, "tzinfo", None) is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def list_demo_accounts() -> list[DemoAccount]:
@@ -80,6 +90,7 @@ def get_user_by_access_token(token: str) -> UserProfile | None:
         return None
 
     _, user_id, expires_at, revoked = session_row
+    expires_at = _normalize_clickhouse_datetime(expires_at)
     if revoked or expires_at <= utc_now():
         return None
 
