@@ -7,8 +7,8 @@ services:
       LMS_CLICKHOUSE_HOST: clickhouse
       LMS_CLICKHOUSE_PORT: 8123
       LMS_CLICKHOUSE_DATABASE: lms
-      LMS_CLICKHOUSE_USER: default
-      LMS_CLICKHOUSE_PASSWORD: ""
+      LMS_CLICKHOUSE_USER: lms
+      LMS_CLICKHOUSE_PASSWORD: lms_dev_password
     ports:
       - "8000:8000"
     depends_on:
@@ -17,6 +17,10 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:25.3
+    environment:
+      CLICKHOUSE_DB: lms
+      CLICKHOUSE_USER: lms
+      CLICKHOUSE_PASSWORD: lms_dev_password
     ports:
       - "8123:8123"
       - "9000:9000"
