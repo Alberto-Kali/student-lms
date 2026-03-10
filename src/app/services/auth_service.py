@@ -28,6 +28,10 @@ def _normalize_clickhouse_datetime(value):
     return value.astimezone(timezone.utc)
 
 
+def _first_row(result):
+    return result.result_rows[0] if result.result_rows else None
+
+
 def list_demo_accounts() -> list[DemoAccount]:
     return [
         DemoAccount(username="admin", password="admin123", full_name="Наталья Рощина", role="admin", status="approved"),
@@ -40,7 +44,7 @@ def list_demo_accounts() -> list[DemoAccount]:
 
 def authenticate_user(username: str, password: str) -> AuthSession:
     client = create_clickhouse_client()
-    row = client.query(
+    row = _first_row(client.query(
         """
         SELECT id, username, full_name, role, status, email, group_name, department, password_hash
         FROM users FINAL
@@ -48,7 +52,7 @@ def authenticate_user(username: str, password: str) -> AuthSession:
         LIMIT 1
         """,
         parameters={"username": username},
-    ).first_row
+    ))
 
     if row is None or not verify_password(password, row[8]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Неверный логин или пароль")
@@ -76,7 +80,7 @@ def authenticate_user(username: str, password: str) -> AuthSession:
 
 def get_user_by_access_token(token: str) -> UserProfile | None:
     client = create_clickhouse_client()
-    session_row = client.query(
+    session_row = _first_row(client.query(
         """
         SELECT id, user_id, expires_at, revoked
         FROM auth_sessions FINAL
@@ -84,7 +88,7 @@ def get_user_by_access_token(token: str) -> UserProfile | None:
         LIMIT 1
         """,
         parameters={"token_hash": hash_token(token)},
-    ).first_row
+    ))
 
     if session_row is None:
         return None
@@ -94,7 +98,7 @@ def get_user_by_access_token(token: str) -> UserProfile | None:
     if revoked or expires_at <= utc_now():
         return None
 
-    user_row = client.query(
+    user_row = _first_row(client.query(
         """
         SELECT id, username, full_name, role, status, email, group_name, department
         FROM users FINAL
@@ -102,7 +106,7 @@ def get_user_by_access_token(token: str) -> UserProfile | None:
         LIMIT 1
         """,
         parameters={"user_id": user_id},
-    ).first_row
+    ))
 
     if user_row is None:
         return None
@@ -111,7 +115,7 @@ def get_user_by_access_token(token: str) -> UserProfile | None:
 
 def logout_session(token: str) -> None:
     client = create_clickhouse_client()
-    session_row = client.query(
+    session_row = _first_row(client.query(
         """
         SELECT id, user_id, token_hash, created_at, expires_at
         FROM auth_sessions FINAL
@@ -119,7 +123,7 @@ def logout_session(token: str) -> None:
         LIMIT 1
         """,
         parameters={"token_hash": hash_token(token)},
-    ).first_row
+    ))
     if session_row is None:
         return
 
