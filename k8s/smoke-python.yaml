@@ -1,0 +1,245 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-smoke-python
+  namespace: dev
+data:
+  default.conf: |
+    server {
+      listen 80;
+      server_name _;
+
+      location /api/ {
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass http://backend:8000;
+      }
+
+      location /visit/ {
+        rewrite ^/visit/?(.*)$ /$1 break;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass http://visit-frontend:80;
+      }
+
+      location / {
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass http://lms-frontend:80;
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickhouse
+  namespace: dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:25.3
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: CLICKHOUSE_DB
+              value: lms
+            - name: CLICKHOUSE_USER
+              value: lms
+            - name: CLICKHOUSE_PASSWORD
+              value: lms_dev_password
+          ports:
+            - containerPort: 8123
+            - containerPort: 9000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: dev
+spec:
+  selector:
+    app: clickhouse
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: native
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/alberto-kali/lms-python-backend:latest
+          imagePullPolicy: Always
+          env:
+            - name: LMS_CLICKHOUSE_HOST
+              value: clickhouse
+            - name: LMS_CLICKHOUSE_PORT
+              value: "8123"
+            - name: LMS_CLICKHOUSE_DATABASE
+              value: lms
+            - name: LMS_CLICKHOUSE_USER
+              value: lms
+            - name: LMS_CLICKHOUSE_PASSWORD
+              value: lms_dev_password
+          ports:
+            - containerPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: dev
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lms-frontend
+  namespace: dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lms-frontend
+  template:
+    metadata:
+      labels:
+        app: lms-frontend
+    spec:
+      containers:
+        - name: lms-frontend
+          image: ghcr.io/alberto-kali/lms-lms-frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lms-frontend
+  namespace: dev
+spec:
+  selector:
+    app: lms-frontend
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: visit-frontend
+  namespace: dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: visit-frontend
+  template:
+    metadata:
+      labels:
+        app: visit-frontend
+    spec:
+      containers:
+        - name: visit-frontend
+          image: ghcr.io/alberto-kali/lms-visit-frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: visit-frontend
+  namespace: dev
+spec:
+  selector:
+    app: visit-frontend
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-smoke-python
+  namespace: dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-smoke-python
+  template:
+    metadata:
+      labels:
+        app: nginx-smoke-python
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-smoke-python
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-smoke-python
+  namespace: dev
+spec:
+  type: LoadBalancer
+  selector:
+    app: nginx-smoke-python
+  ports:
+    - port: 80
+      targetPort: 80
