@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     app_name: str = "student-lms-backend"
     app_version: str = "0.1.0"
     api_prefix: str = "/api/v1"
+    cors_origins: list[str] = ["*"]
 
     clickhouse_host: str = "clickhouse"
     clickhouse_port: int = 8123
