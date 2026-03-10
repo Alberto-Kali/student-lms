@@ -4,11 +4,12 @@ import UiButton from '../ui/UiButton.vue'
 import UiField from '../ui/UiField.vue'
 import UiPanel from '../ui/UiPanel.vue'
 import UiStatusPill from '../ui/UiStatusPill.vue'
-import type { Account } from '../../types/lms'
+import type { DemoAccount } from '../../types/lms'
 
 const props = defineProps<{
   error: string
-  demoAccounts: Account[]
+  loading?: boolean
+  demoAccounts: DemoAccount[]
 }>()
 
 const emit = defineEmits<{
@@ -25,19 +26,19 @@ const submit = () => {
   })
 }
 
-const roleLabel: Record<Account['role'], string> = {
+const roleLabel: Record<DemoAccount['role'], string> = {
   admin: 'Администратор',
   student: 'Студент',
   teacher: 'Преподаватель',
 }
 
-const statusLabel: Record<Account['status'], string> = {
+const statusLabel: Record<DemoAccount['status'], string> = {
   approved: 'Одобрен',
   pending: 'Ожидает одобрения',
   blocked: 'Заблокирован',
 }
 
-const statusTone: Record<Account['status'], 'approved' | 'pending' | 'blocked'> = {
+const statusTone: Record<DemoAccount['status'], 'approved' | 'pending' | 'blocked'> = {
   approved: 'approved',
   pending: 'pending',
   blocked: 'blocked',
@@ -51,15 +52,15 @@ const statusTone: Record<Account['status'], 'approved' | 'pending' | 'blocked'> 
         <UiField v-model="username" label="Логин" placeholder="Введите логин" />
         <UiField v-model="password" type="password" label="Пароль" placeholder="Введите пароль" />
         <p v-if="props.error" class="auth-error">{{ props.error }}</p>
-        <UiButton type="submit">Войти</UiButton>
+        <UiButton type="submit" :disabled="props.loading">{{ props.loading ? 'Входим…' : 'Войти' }}</UiButton>
       </form>
     </UiPanel>
 
     <UiPanel title="Демо-аккаунты" subtitle="Для проверки разных ролей и статусов.">
       <div class="demo-list">
-        <div v-for="account in props.demoAccounts" :key="account.id" class="demo-item">
+        <div v-for="account in props.demoAccounts" :key="account.username" class="demo-item">
           <div>
-            <p class="demo-name">{{ account.name }}</p>
+            <p class="demo-name">{{ account.full_name }}</p>
             <p class="demo-meta">{{ roleLabel[account.role] }} · {{ account.username }} / {{ account.password }}</p>
           </div>
           <UiStatusPill :tone="statusTone[account.status]">{{ statusLabel[account.status] }}</UiStatusPill>
