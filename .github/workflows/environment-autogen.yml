@@ -18,7 +18,7 @@ on:
 
 permissions:
   contents: write
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   generate:
@@ -30,9 +30,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate and push manifests to integration branches
+      - name: Generate manifests and open PRs to integration branches
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           BASE_BRANCH: ${{ github.event_name == 'pull_request_review' && github.event.pull_request.base.ref || github.ref_name }}
           PR_NUMBER: ${{ github.event_name == 'pull_request_review' && github.event.pull_request.number || 0 }}
           HEAD_SHA: ${{ github.event_name == 'pull_request_review' && github.event.pull_request.head.sha || github.sha }}
@@ -71,8 +72,11 @@ jobs:
               BACKEND_PORT=8080
             fi
 
+            WORK_BRANCH="autogen/${ENV_NAME}/${BASE_BRANCH}"
+            WORK_BRANCH="${WORK_BRANCH//\//-}"
+
             git fetch origin "$ENV_NAME"
-            git checkout -B "$ENV_NAME" "origin/$ENV_NAME"
+            git checkout -B "$WORK_BRANCH" "origin/$ENV_NAME"
 
             mkdir -p environments/generated k8s nginx
 
@@ -445,11 +449,26 @@ jobs:
                      environments/generated/metadata.txt \
                      environments/generated
 
-            if git diff --cached --quiet; then
-              echo "No manifest changes for ${ENV_NAME}"
-              continue
-            fi
+          if git diff --cached --quiet; then
+            echo "No manifest changes for ${ENV_NAME}"
+            continue
+          fi
 
-            git commit -m "chore(env): regenerate ${ENV_NAME} runtime manifests from ${BASE_BRANCH} PR #${PR_NUMBER}"
-            git push origin "HEAD:${ENV_NAME}"
+          git commit -m "chore(env): regenerate ${ENV_NAME} runtime manifests from ${BASE_BRANCH} PR #${PR_NUMBER}"
+          git push --force-with-lease origin "HEAD:${WORK_BRANCH}"
+
+          EXISTING_PR="$(gh pr list --base "$ENV_NAME" --head "$WORK_BRANCH" --json number --jq '.[0].number')"
+          PR_TITLE="chore(env): refresh ${ENV_NAME} manifests from ${BASE_BRANCH}"
+          PR_BODY=$(printf '## Summary\n- regenerate Docker Compose, NGINX and Kubernetes manifests for %s\n- source branch: %s\n- trigger: %s\n- source sha: %s\n- source PR: %s\n' \
+            "$ENV_NAME" \
+            "$BASE_BRANCH" \
+            "$GITHUB_EVENT_NAME" \
+            "$HEAD_SHA" \
+            "$PR_NUMBER")
+
+          if [[ -n "$EXISTING_PR" ]]; then
+            gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body "$PR_BODY"
+          else
+            gh pr create --base "$ENV_NAME" --head "$WORK_BRANCH" --title "$PR_TITLE" --body "$PR_BODY"
+          fi
           done
