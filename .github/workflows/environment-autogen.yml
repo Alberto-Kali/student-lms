@@ -437,14 +437,13 @@ jobs:
           EOF
             sed -i 's/^            //' environments/generated/metadata.txt
 
-            rm -f environments/generated/docker-compose.generated.yml environments/generated/k8s.generated.yaml
+          rm -f environments/generated/docker-compose.generated.yml environments/generated/k8s.generated.yaml
 
-            git add docker-compose.yml \
-                    nginx/default.conf \
-                    k8s/generated.yaml \
-                    environments/generated/metadata.txt \
-                    environments/generated/docker-compose.generated.yml \
-                    environments/generated/k8s.generated.yaml
+          git add -A docker-compose.yml \
+                     nginx/default.conf \
+                     k8s/generated.yaml \
+                     environments/generated/metadata.txt \
+                     environments/generated
 
             if git diff --cached --quiet; then
               echo "No manifest changes for ${ENV_NAME}"
