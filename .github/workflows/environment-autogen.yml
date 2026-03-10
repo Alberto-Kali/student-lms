@@ -30,7 +30,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate manifests and open PRs to integration branches
+      - name: Generate manifests and open PRs
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -52,7 +52,7 @@ jobs:
               TARGET_ENVS=(dev)
               ;;
             haskell-backend)
-              TARGET_ENVS=(preproduction)
+              TARGET_ENVS=(dev preproduction)
               ;;
             *)
               echo "Unsupported service branch: $BASE_BRANCH"
@@ -63,59 +63,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          for ENV_NAME in "${TARGET_ENVS[@]}"; do
-            if [[ "$ENV_NAME" == "dev" ]]; then
-              BACKEND_IMAGE="ghcr.io/${OWNER_LOWER}/lms-python-backend"
-              BACKEND_PORT=8000
-            else
-              BACKEND_IMAGE="ghcr.io/${OWNER_LOWER}/lms-haskell-backend"
-              BACKEND_PORT=8080
-            fi
-
-            WORK_BRANCH="autogen/${ENV_NAME}/${BASE_BRANCH}"
-            WORK_BRANCH="${WORK_BRANCH//\//-}"
-
-            git fetch origin "$ENV_NAME"
-            git checkout -B "$WORK_BRANCH" "origin/$ENV_NAME"
-
-            mkdir -p environments/generated k8s nginx
-
-            cat > docker-compose.yml <<EOF
-            name: student-lms-${ENV_NAME}
+          write_smoke_python() {
+            cat > docker-compose.smoke-python.yml <<EOF
             services:
-              nginx:
-                image: nginx:1.27-alpine
-                pull_policy: always
-                ports:
-                  - "\${PUBLIC_PORT:-8080}:80"
-                volumes:
-                  - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-                depends_on:
-                  - lms-frontend
-                  - visit-frontend
-                  - backend
-
-              lms-frontend:
-                image: ghcr.io/${OWNER_LOWER}/lms-lms-frontend:latest
-                pull_policy: always
-
-              visit-frontend:
-                image: ghcr.io/${OWNER_LOWER}/lms-visit-frontend:latest
-                pull_policy: always
-
-              backend:
-                image: ${BACKEND_IMAGE}:latest
-                pull_policy: always
-                depends_on:
-                  clickhouse:
-                    condition: service_healthy
-                environment:
-                  LMS_CLICKHOUSE_HOST: clickhouse
-                  LMS_CLICKHOUSE_PORT: 8123
-                  LMS_CLICKHOUSE_DATABASE: lms
-                  LMS_CLICKHOUSE_USER: lms
-                  LMS_CLICKHOUSE_PASSWORD: lms_dev_password
-
               clickhouse:
                 image: clickhouse/clickhouse-server:25.3
                 pull_policy: always
@@ -123,27 +73,63 @@ jobs:
                   CLICKHOUSE_DB: lms
                   CLICKHOUSE_USER: lms
                   CLICKHOUSE_PASSWORD: lms_dev_password
+                ports:
+                  - "\${CLICKHOUSE_HTTP_PORT:-18123}:8123"
+                  - "\${CLICKHOUSE_NATIVE_PORT:-19000}:9000"
+                volumes:
+                  - smoke_python_clickhouse_data:/var/lib/clickhouse
                 healthcheck:
                   test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
                   interval: 10s
                   timeout: 5s
-                  retries: 10
-                volumes:
-                  - clickhouse_data:/var/lib/clickhouse
-            volumes:
-              clickhouse_data:
-          EOF
-            sed -i 's/^            //' docker-compose.yml
+                  retries: 20
 
-            cat > nginx/default.conf <<EOF
+              backend:
+                image: ghcr.io/${OWNER_LOWER}/lms-python-backend:latest
+                pull_policy: always
+                environment:
+                  LMS_CLICKHOUSE_HOST: clickhouse
+                  LMS_CLICKHOUSE_PORT: 8123
+                  LMS_CLICKHOUSE_DATABASE: lms
+                  LMS_CLICKHOUSE_USER: lms
+                  LMS_CLICKHOUSE_PASSWORD: lms_dev_password
+                depends_on:
+                  clickhouse:
+                    condition: service_healthy
+
+              lms-frontend:
+                image: ghcr.io/${OWNER_LOWER}/lms-lms-frontend:latest
+                pull_policy: always
+                depends_on:
+                  - backend
+
+              visit-frontend:
+                image: ghcr.io/${OWNER_LOWER}/lms-visit-frontend:latest
+                pull_policy: always
+                depends_on:
+                  - backend
+
+              nginx:
+                image: nginx:1.27-alpine
+                pull_policy: always
+                ports:
+                  - "\${PUBLIC_PORT:-18081}:80"
+                volumes:
+                  - ./nginx/smoke-python.conf:/etc/nginx/conf.d/default.conf:ro
+                depends_on:
+                  - backend
+                  - lms-frontend
+                  - visit-frontend
+
+            volumes:
+              smoke_python_clickhouse_data:
+            EOF
+            sed -i 's/^            //' docker-compose.smoke-python.yml
+
+            cat > nginx/smoke-python.conf <<EOF
             server {
               listen 80;
               server_name _;
-
-              location = /healthz {
-                return 200 'ok';
-                add_header Content-Type text/plain;
-              }
 
               location /api/ {
                 proxy_http_version 1.1;
@@ -151,7 +137,7 @@ jobs:
                 proxy_set_header X-Real-IP \$remote_addr;
                 proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
                 proxy_set_header X-Forwarded-Proto \$scheme;
-                proxy_pass http://backend:${BACKEND_PORT};
+                proxy_pass http://backend:8000;
               }
 
               location /visit/ {
@@ -173,263 +159,241 @@ jobs:
                 proxy_pass http://lms-frontend:80;
               }
             }
-          EOF
+            EOF
+            sed -i 's/^            //' nginx/smoke-python.conf
+          }
+
+          write_smoke_visit() {
+            cat > docker-compose.smoke-visit.yml <<EOF
+            services:
+              clickhouse:
+                image: clickhouse/clickhouse-server:25.3
+                pull_policy: always
+                environment:
+                  CLICKHOUSE_DB: lms
+                  CLICKHOUSE_USER: lms
+                  CLICKHOUSE_PASSWORD: lms_dev_password
+                volumes:
+                  - smoke_visit_clickhouse_data:/var/lib/clickhouse
+                healthcheck:
+                  test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+                  interval: 10s
+                  timeout: 5s
+                  retries: 20
+
+              backend:
+                image: ghcr.io/${OWNER_LOWER}/lms-python-backend:latest
+                pull_policy: always
+                environment:
+                  LMS_CLICKHOUSE_HOST: clickhouse
+                  LMS_CLICKHOUSE_PORT: 8123
+                  LMS_CLICKHOUSE_DATABASE: lms
+                  LMS_CLICKHOUSE_USER: lms
+                  LMS_CLICKHOUSE_PASSWORD: lms_dev_password
+                depends_on:
+                  clickhouse:
+                    condition: service_healthy
+
+              visit-frontend:
+                image: ghcr.io/${OWNER_LOWER}/lms-visit-frontend:latest
+                pull_policy: always
+                depends_on:
+                  - backend
+
+              nginx:
+                image: nginx:1.27-alpine
+                pull_policy: always
+                ports:
+                  - "\${PUBLIC_PORT:-18082}:80"
+                volumes:
+                  - ./nginx/smoke-visit.conf:/etc/nginx/conf.d/default.conf:ro
+                depends_on:
+                  - backend
+                  - visit-frontend
+
+            volumes:
+              smoke_visit_clickhouse_data:
+            EOF
+            sed -i 's/^            //' docker-compose.smoke-visit.yml
+
+            cat > nginx/smoke-visit.conf <<EOF
+            server {
+              listen 80;
+              server_name _;
+
+              location /api/ {
+                proxy_http_version 1.1;
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+                proxy_pass http://backend:8000;
+              }
+
+              location / {
+                proxy_http_version 1.1;
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+                proxy_pass http://visit-frontend:80;
+              }
+            }
+            EOF
+            sed -i 's/^            //' nginx/smoke-visit.conf
+          }
+
+          write_smoke_haskell() {
+            cat > docker-compose.smoke-haskell.yml <<EOF
+            services:
+              lms-frontend:
+                image: ghcr.io/${OWNER_LOWER}/lms-lms-frontend:latest
+                pull_policy: always
+
+              visit-frontend:
+                image: ghcr.io/${OWNER_LOWER}/lms-visit-frontend:latest
+                pull_policy: always
+
+              backend:
+                image: ghcr.io/${OWNER_LOWER}/lms-haskell-backend:latest
+                pull_policy: always
+
+              nginx:
+                image: nginx:1.27-alpine
+                pull_policy: always
+                ports:
+                  - "\${PUBLIC_PORT:-18083}:80"
+                volumes:
+                  - ./nginx/smoke-haskell.conf:/etc/nginx/conf.d/default.conf:ro
+                depends_on:
+                  - backend
+                  - lms-frontend
+                  - visit-frontend
+            EOF
+            sed -i 's/^            //' docker-compose.smoke-haskell.yml
+
+            cat > nginx/smoke-haskell.conf <<EOF
+            server {
+              listen 80;
+              server_name _;
+
+              location /api/ {
+                proxy_http_version 1.1;
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+                proxy_pass http://backend:8080;
+              }
+
+              location /visit/ {
+                rewrite ^/visit/?(.*)$ /\$1 break;
+                proxy_http_version 1.1;
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+                proxy_pass http://visit-frontend:80;
+              }
+
+              location / {
+                proxy_http_version 1.1;
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+                proxy_pass http://lms-frontend:80;
+              }
+            }
+            EOF
+            sed -i 's/^            //' nginx/smoke-haskell.conf
+          }
+
+          write_preproduction() {
+            cat > docker-compose.yml <<EOF
+            services:
+              lms-frontend:
+                image: ghcr.io/${OWNER_LOWER}/lms-lms-frontend:latest
+                pull_policy: always
+
+              visit-frontend:
+                image: ghcr.io/${OWNER_LOWER}/lms-visit-frontend:latest
+                pull_policy: always
+
+              backend:
+                image: ghcr.io/${OWNER_LOWER}/lms-haskell-backend:latest
+                pull_policy: always
+
+              nginx:
+                image: nginx:1.27-alpine
+                pull_policy: always
+                ports:
+                  - "\${PUBLIC_PORT:-8080}:80"
+                volumes:
+                  - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+                depends_on:
+                  - backend
+                  - lms-frontend
+                  - visit-frontend
+            EOF
+            sed -i 's/^            //' docker-compose.yml
+
+            cat > nginx/default.conf <<EOF
+            server {
+              listen 80;
+              server_name _;
+
+              location /api/ {
+                proxy_http_version 1.1;
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+                proxy_pass http://backend:8080;
+              }
+
+              location /visit/ {
+                rewrite ^/visit/?(.*)$ /\$1 break;
+                proxy_http_version 1.1;
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+                proxy_pass http://visit-frontend:80;
+              }
+
+              location / {
+                proxy_http_version 1.1;
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+                proxy_pass http://lms-frontend:80;
+              }
+            }
+            EOF
             sed -i 's/^            //' nginx/default.conf
+          }
 
-            cat > k8s/generated.yaml <<EOF
-            apiVersion: v1
-            kind: Namespace
-            metadata:
-              name: ${ENV_NAME}
-            ---
-            apiVersion: v1
-            kind: ConfigMap
-            metadata:
-              name: nginx-config
-              namespace: ${ENV_NAME}
-            data:
-              default.conf: |
-                server {
-                  listen 80;
-                  server_name _;
+          for ENV_NAME in "${TARGET_ENVS[@]}"; do
+            WORK_BRANCH="chore/autogen-${ENV_NAME}-${BASE_BRANCH}"
 
-                  location = /healthz {
-                    return 200 'ok';
-                    add_header Content-Type text/plain;
-                  }
+            git fetch origin "$ENV_NAME"
+            git checkout -B "$WORK_BRANCH" "origin/$ENV_NAME"
 
-                  location /api/ {
-                    proxy_http_version 1.1;
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                    proxy_pass http://backend:${BACKEND_PORT};
-                  }
+            mkdir -p environments/generated nginx
 
-                  location /visit/ {
-                    rewrite ^/visit/?(.*)$ /\$1 break;
-                    proxy_http_version 1.1;
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                    proxy_pass http://visit-frontend:80;
-                  }
+            rm -f docker-compose.yml docker-compose.smoke-python.yml docker-compose.smoke-visit.yml docker-compose.smoke-haskell.yml
+            rm -f nginx/default.conf nginx/smoke-python.conf nginx/smoke-visit.conf nginx/smoke-haskell.conf
+            rm -rf k8s
 
-                  location / {
-                    proxy_http_version 1.1;
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                    proxy_pass http://lms-frontend:80;
-                  }
-                }
-            ---
-            apiVersion: apps/v1
-            kind: Deployment
-            metadata:
-              name: lms-frontend
-              namespace: ${ENV_NAME}
-            spec:
-              replicas: 2
-              selector:
-                matchLabels:
-                  app: lms-frontend
-              template:
-                metadata:
-                  labels:
-                    app: lms-frontend
-                spec:
-                  containers:
-                    - name: lms-frontend
-                      image: ghcr.io/${OWNER_LOWER}/lms-lms-frontend:latest
-                      imagePullPolicy: Always
-                      ports:
-                        - containerPort: 80
-            ---
-            apiVersion: v1
-            kind: Service
-            metadata:
-              name: lms-frontend
-              namespace: ${ENV_NAME}
-            spec:
-              selector:
-                app: lms-frontend
-              ports:
-                - port: 80
-                  targetPort: 80
-            ---
-            apiVersion: apps/v1
-            kind: Deployment
-            metadata:
-              name: visit-frontend
-              namespace: ${ENV_NAME}
-            spec:
-              replicas: 1
-              selector:
-                matchLabels:
-                  app: visit-frontend
-              template:
-                metadata:
-                  labels:
-                    app: visit-frontend
-                spec:
-                  containers:
-                    - name: visit-frontend
-                      image: ghcr.io/${OWNER_LOWER}/lms-visit-frontend:latest
-                      imagePullPolicy: Always
-                      ports:
-                        - containerPort: 80
-            ---
-            apiVersion: v1
-            kind: Service
-            metadata:
-              name: visit-frontend
-              namespace: ${ENV_NAME}
-            spec:
-              selector:
-                app: visit-frontend
-              ports:
-                - port: 80
-                  targetPort: 80
-            ---
-            apiVersion: apps/v1
-            kind: Deployment
-            metadata:
-              name: clickhouse
-              namespace: ${ENV_NAME}
-            spec:
-              replicas: 1
-              selector:
-                matchLabels:
-                  app: clickhouse
-              template:
-                metadata:
-                  labels:
-                    app: clickhouse
-                spec:
-                  containers:
-                    - name: clickhouse
-                      image: clickhouse/clickhouse-server:25.3
-                      imagePullPolicy: Always
-                      env:
-                        - name: CLICKHOUSE_DB
-                          value: lms
-                        - name: CLICKHOUSE_USER
-                          value: lms
-                        - name: CLICKHOUSE_PASSWORD
-                          value: lms_dev_password
-                      ports:
-                        - containerPort: 8123
-                        - containerPort: 9000
-            ---
-            apiVersion: v1
-            kind: Service
-            metadata:
-              name: clickhouse
-              namespace: ${ENV_NAME}
-            spec:
-              selector:
-                app: clickhouse
-              ports:
-                - name: http
-                  port: 8123
-                  targetPort: 8123
-                - name: native
-                  port: 9000
-                  targetPort: 9000
-            ---
-            apiVersion: apps/v1
-            kind: Deployment
-            metadata:
-              name: backend
-              namespace: ${ENV_NAME}
-            spec:
-              replicas: 2
-              selector:
-                matchLabels:
-                  app: backend
-              template:
-                metadata:
-                  labels:
-                    app: backend
-                spec:
-                  containers:
-                    - name: backend
-                      image: ${BACKEND_IMAGE}:latest
-                      imagePullPolicy: Always
-                      ports:
-                        - containerPort: ${BACKEND_PORT}
-                      env:
-                        - name: LMS_CLICKHOUSE_HOST
-                          value: clickhouse
-                        - name: LMS_CLICKHOUSE_PORT
-                          value: "8123"
-                        - name: LMS_CLICKHOUSE_DATABASE
-                          value: lms
-                        - name: LMS_CLICKHOUSE_USER
-                          value: lms
-                        - name: LMS_CLICKHOUSE_PASSWORD
-                          value: lms_dev_password
-            ---
-            apiVersion: v1
-            kind: Service
-            metadata:
-              name: backend
-              namespace: ${ENV_NAME}
-            spec:
-              selector:
-                app: backend
-              ports:
-                - port: ${BACKEND_PORT}
-                  targetPort: ${BACKEND_PORT}
-            ---
-            apiVersion: apps/v1
-            kind: Deployment
-            metadata:
-              name: nginx
-              namespace: ${ENV_NAME}
-            spec:
-              replicas: 1
-              selector:
-                matchLabels:
-                  app: nginx
-              template:
-                metadata:
-                  labels:
-                    app: nginx
-                spec:
-                  containers:
-                    - name: nginx
-                      image: nginx:1.27-alpine
-                      ports:
-                        - containerPort: 80
-                      volumeMounts:
-                        - name: nginx-config
-                          mountPath: /etc/nginx/conf.d/default.conf
-                          subPath: default.conf
-                  volumes:
-                    - name: nginx-config
-                      configMap:
-                        name: nginx-config
-            ---
-            apiVersion: v1
-            kind: Service
-            metadata:
-              name: nginx
-              namespace: ${ENV_NAME}
-            spec:
-              type: LoadBalancer
-              selector:
-                app: nginx
-              ports:
-                - name: http
-                  port: 80
-                  targetPort: 80
-          EOF
-            sed -i 's/^            //' k8s/generated.yaml
+            if [[ "$ENV_NAME" == "dev" ]]; then
+              write_smoke_python
+              write_smoke_visit
+              write_smoke_haskell
+            else
+              write_preproduction
+            fi
 
             cat > environments/generated/metadata.txt <<EOF
             source_service_branch=${BASE_BRANCH}
@@ -438,37 +402,37 @@ jobs:
             source_sha=${HEAD_SHA}
             source_sha_short=${SHA_SHORT}
             generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          EOF
+            target_env=${ENV_NAME}
+            EOF
             sed -i 's/^            //' environments/generated/metadata.txt
 
-          rm -f environments/generated/docker-compose.generated.yml environments/generated/k8s.generated.yaml
+            git add -A docker-compose.yml \
+                       docker-compose.smoke-python.yml \
+                       docker-compose.smoke-visit.yml \
+                       docker-compose.smoke-haskell.yml \
+                       nginx \
+                       environments/generated
 
-          git add -A docker-compose.yml \
-                     nginx/default.conf \
-                     k8s/generated.yaml \
-                     environments/generated/metadata.txt \
-                     environments/generated
+            if git diff --cached --quiet; then
+              echo "No manifest changes for ${ENV_NAME}"
+              continue
+            fi
 
-          if git diff --cached --quiet; then
-            echo "No manifest changes for ${ENV_NAME}"
-            continue
-          fi
+            git commit -m "chore(env): regenerate ${ENV_NAME} runtime manifests from ${BASE_BRANCH} PR #${PR_NUMBER}"
+            git push --force-with-lease origin "HEAD:${WORK_BRANCH}"
 
-          git commit -m "chore(env): regenerate ${ENV_NAME} runtime manifests from ${BASE_BRANCH} PR #${PR_NUMBER}"
-          git push --force-with-lease origin "HEAD:${WORK_BRANCH}"
+            EXISTING_PR="$(gh pr list --base "$ENV_NAME" --head "$WORK_BRANCH" --json number --jq '.[0].number')"
+            PR_TITLE="chore(env): refresh ${ENV_NAME} manifests from ${BASE_BRANCH}"
+            PR_BODY=$(printf '## Summary\n- regenerate compose manifests for %s\n- source branch: %s\n- trigger: %s\n- source sha: %s\n- source PR: %s\n' \
+              "$ENV_NAME" \
+              "$BASE_BRANCH" \
+              "$GITHUB_EVENT_NAME" \
+              "$HEAD_SHA" \
+              "$PR_NUMBER")
 
-          EXISTING_PR="$(gh pr list --base "$ENV_NAME" --head "$WORK_BRANCH" --json number --jq '.[0].number')"
-          PR_TITLE="chore(env): refresh ${ENV_NAME} manifests from ${BASE_BRANCH}"
-          PR_BODY=$(printf '## Summary\n- regenerate Docker Compose, NGINX and Kubernetes manifests for %s\n- source branch: %s\n- trigger: %s\n- source sha: %s\n- source PR: %s\n' \
-            "$ENV_NAME" \
-            "$BASE_BRANCH" \
-            "$GITHUB_EVENT_NAME" \
-            "$HEAD_SHA" \
-            "$PR_NUMBER")
-
-          if [[ -n "$EXISTING_PR" ]]; then
-            gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body "$PR_BODY"
-          else
-            gh pr create --base "$ENV_NAME" --head "$WORK_BRANCH" --title "$PR_TITLE" --body "$PR_BODY"
-          fi
+            if [[ -n "$EXISTING_PR" ]]; then
+              gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body "$PR_BODY"
+            else
+              gh pr create --base "$ENV_NAME" --head "$WORK_BRANCH" --title "$PR_TITLE" --body "$PR_BODY"
+            fi
           done
