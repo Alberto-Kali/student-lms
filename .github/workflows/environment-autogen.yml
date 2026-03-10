@@ -1,8 +1,15 @@
 name: Environment Manifests Autogen
 
 on:
+  workflow_dispatch:
   pull_request_review:
     types: [submitted]
+    branches:
+      - lms-frontend
+      - visit-frontend
+      - python-backend
+      - haskell-backend
+  push:
     branches:
       - lms-frontend
       - visit-frontend
@@ -15,7 +22,7 @@ permissions:
 
 jobs:
   generate:
-    if: github.event.review.state == 'approved'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.review.state == 'approved'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -26,9 +33,9 @@ jobs:
       - name: Generate and push manifests to integration branches
         shell: bash
         env:
-          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_BRANCH: ${{ github.event_name == 'pull_request_review' && github.event.pull_request.base.ref || github.ref_name }}
+          PR_NUMBER: ${{ github.event_name == 'pull_request_review' && github.event.pull_request.number || 0 }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request_review' && github.event.pull_request.head.sha || github.sha }}
           OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
@@ -102,12 +109,16 @@ jobs:
                   LMS_CLICKHOUSE_HOST: clickhouse
                   LMS_CLICKHOUSE_PORT: 8123
                   LMS_CLICKHOUSE_DATABASE: lms
-                  LMS_CLICKHOUSE_USER: default
-                  LMS_CLICKHOUSE_PASSWORD: ""
+                  LMS_CLICKHOUSE_USER: lms
+                  LMS_CLICKHOUSE_PASSWORD: lms_dev_password
 
               clickhouse:
                 image: clickhouse/clickhouse-server:25.3
                 pull_policy: always
+                environment:
+                  CLICKHOUSE_DB: lms
+                  CLICKHOUSE_USER: lms
+                  CLICKHOUSE_PASSWORD: lms_dev_password
                 healthcheck:
                   test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
                   interval: 10s
@@ -299,6 +310,13 @@ jobs:
                     - name: clickhouse
                       image: clickhouse/clickhouse-server:25.3
                       imagePullPolicy: Always
+                      env:
+                        - name: CLICKHOUSE_DB
+                          value: lms
+                        - name: CLICKHOUSE_USER
+                          value: lms
+                        - name: CLICKHOUSE_PASSWORD
+                          value: lms_dev_password
                       ports:
                         - containerPort: 8123
                         - containerPort: 9000
@@ -348,9 +366,9 @@ jobs:
                         - name: LMS_CLICKHOUSE_DATABASE
                           value: lms
                         - name: LMS_CLICKHOUSE_USER
-                          value: default
+                          value: lms
                         - name: LMS_CLICKHOUSE_PASSWORD
-                          value: ""
+                          value: lms_dev_password
             ---
             apiVersion: v1
             kind: Service
@@ -411,7 +429,7 @@ jobs:
 
             cat > environments/generated/metadata.txt <<EOF
             source_service_branch=${BASE_BRANCH}
-            trigger=pull_request_review_approved
+            trigger=${GITHUB_EVENT_NAME}
             pr_number=${PR_NUMBER}
             source_sha=${HEAD_SHA}
             source_sha_short=${SHA_SHORT}
